@@ -1,11 +1,45 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
+    <title>My Blog</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .post {
+            margin-bottom: 40px;
+        }
+        .post h1 {
+            margin-top: 0;
+        }
+        .post iframe {
+            display: block;
+            width: 100%;
+            height: 400px;
+            border: none;
+        }
+    </style>
 </head>
 <body>
-    content here!
+    <div class="container">
+        <div class="post">
+            <h1>High Mean Photon Number</h1>
+            <p>High mean photon number distributions spaced by 50 ps</p>
+            <iframe src="./3_high_mfn.html" onload="resizeIframe(this)" scrolling="no"></iframe>
+            <script>
+                function resizeIframe(iframe) {
+                    iframe.style.height = iframe.contentWindow.document.documentElement.scrollHeight + 'px';
+                }
+            </script>
+        </div>
+    </div>
 </body>
 </html>
