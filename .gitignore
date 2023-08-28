@@ -5,7 +5,7 @@
 !/data/.gitkeep
 !/inter/.gitkeep
 !.gitignore
-
+!.github/
 
 *__pycache__
 
