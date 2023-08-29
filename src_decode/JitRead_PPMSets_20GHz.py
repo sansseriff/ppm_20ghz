@@ -44,6 +44,9 @@ import orjson  # a fast json library written in rust
 
 from scipy import ndimage
 
+from sklearn.mixture import GaussianMixture
+from dataclasses import dataclass
+
 # Colors, palette = phd.viz.phd_style( data_width = 0.3, grid = True, axese_width=0.3, text = 2)
 matplotlib.rcParams["figure.dpi"] = 150
 doc = curdoc()
@@ -575,6 +578,66 @@ def find_pnr_correction(counts):
     corr2[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask), corr2[~mask])
 
     return slices, corr1, corr2
+
+
+@dataclass
+class GMData:
+    covariances: np.ndarray
+    means: np.ndarray
+    weights: np.ndarray
+
+
+def find_gaussian_mixture(counts):
+    gm = GaussianMixture(n_components=20, random_state=42)
+    gm.fit(counts)
+    return GMData(gm.covariances_, gm.means_, gm.weights_)
+
+
+def gaussian_2d(x, y, cov, pos=(0, 0)):
+    """Generate a 2D Gaussian distribution with a given covariance matrix and position."""
+    # Unpack the position tuple
+    x0, y0 = pos
+
+    # Shift the coordinates by x0 and y0
+    x = x - x0
+    y = y - y0
+
+    # Calculate the inverse of the covariance matrix
+    inv_cov = np.linalg.inv(cov)
+
+    # Calculate the determinant of the covariance matrix
+    det_cov = np.linalg.det(cov)
+
+    # Calculate the exponent term of the Gaussian function
+    exponent = -0.5 * (
+        inv_cov[0, 0] * x**2
+        + (inv_cov[0, 1] + inv_cov[1, 0]) * x * y
+        + inv_cov[1, 1] * y**2
+    )
+
+    # Calculate the normalization constant of the Gaussian function
+    norm_const = 1 / (2 * np.pi * np.sqrt(det_cov))
+
+    # Calculate the Gaussian function values
+    gauss = norm_const * np.exp(exponent)
+
+    return gauss
+
+
+def find_gm_prob_for_offset(xy, offset_idx, gm_data: GMData, bin_width = 50,):
+    """given the gaussian mixture model for the distribution of counts
+    at a given offset index, find the probability of the count originating 
+    from the time slot with this offset. The offset index is a number of 
+    bins, (probably 50 ps wide)
+    """
+    x = xy[0]
+    y = xy[1]
+    z = 0
+
+    offset = offset_idx*bin_width
+
+    for pos, covar, w in zip(gm_data.means, gm_data.covariances, gm_data.weights):
+        z = z + gaussian_2d(x, y, covar, [pos[0] + offset, pos[1] + offset]) * w
 
 
 def viz_counts_and_correction(counts, slices, corr1, corr2, inter_path=None, db=None):
@@ -1449,8 +1512,8 @@ if __name__ == "__main__":
         # pair = ["340s_.008_.050_Sept10_picScan_16.0.1.ttbin", 9500000]
         # pair = ["340s_.008_.050_Sept10_picScan_18.0.1.ttbin", 9500000]
         # pair = ["340s_.008_.050_Sept10_picScan_20.0.1.ttbin", 9500000]
-        # pair = ["340s_.008_.050_Sept10_picScan_22.0.1.ttbin", 9500000]
-        pair = ["340s_.008_.050_Sept10_picScan_24.0.1.ttbin", 9500000]
+        pair = ["340s_.008_.050_Sept10_picScan_22.0.1.ttbin", 9500000]
+        # pair = ["340s_.008_.050_Sept10_picScan_24.0.1.ttbin", 9500000]
         # pair = ["340s_.008_.050_Sept10_picScan_26.0.1.ttbin", 7500000]
         # pair = ["340s_.008_.050_Sept10_picScan_28.0.1.ttbin", 6500000]
         # pair = ["340s_.008_.050_Sept10_picScan_30.0.1.ttbin", 5000000]
