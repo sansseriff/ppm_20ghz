@@ -18,7 +18,7 @@ import snsphd.viz as viz
 
 # import matplotlib
 from datetime import datetime
-from nan_seperation import seperate_by_nans
+from nan_seperation import seperate_by_nans, seperate_by_nans_2d
 from ClockTools_PPMSets import clockScan, histScan
 import matplotlib
 
@@ -460,7 +460,14 @@ def offset_tags_single(data, offset, clock_period):
     less_than_mask = data < -50 / 2
     data[greater_than_mask] = data[greater_than_mask] - clock_period
     data[less_than_mask] = data[less_than_mask] + clock_period
+    return data
 
+def offset_tags_single_2d(data, offset, clock_period):
+    data = data - offset
+    greater_than_mask = data[:,0] > clock_period + 50 / 2
+    less_than_mask = data[:,0] < -50 / 2
+    data[greater_than_mask] = data[greater_than_mask] - clock_period
+    data[less_than_mask] = data[less_than_mask] + clock_period
     return data
 
 
@@ -587,7 +594,7 @@ class GMData:
     weights: np.ndarray
 
 
-def find_gaussian_mixture(counts):
+def find_gaussian_mixture(counts) -> GMData:
     gm = GaussianMixture(n_components=20, random_state=42)
     gm.fit(counts)
     return GMData(gm.covariances_, gm.means_, gm.weights_)
@@ -871,7 +878,7 @@ def using_clump(a):
     return list_of_arrays
 
 
-def decode_ppm(m_data_corrected, gt_path, sequence, clock_period, res_idx=[1]):
+def decode_ppm(m_data_corrected, gt_path, sequence, clock_period, gm_data, res_idx=[1]):
     sequence_data, set_data = import_ground_truth(gt_path, sequence)
     dead_pulses = set_data["pulses_per_cycle"] - set_data["ppm"]["m_value"]
     dead_time_ps = dead_pulses * set_data["laser_time"] * 1e12
@@ -902,7 +909,9 @@ def decode_ppm(m_data_corrected, gt_path, sequence, clock_period, res_idx=[1]):
 
         initial_time = initial_time + pulses_per_cycle * laser_time
 
-    tag_group_list = seperate_by_nans(m_data_corrected, 200)
+
+    tag_group_list = seperate_by_nans_2d(m_data_corrected, 200)
+
     if DEBUG:
         print("LENGTH OF TAG GROUP LIST: ", len(tag_group_list))
 
@@ -913,16 +922,23 @@ def decode_ppm(m_data_corrected, gt_path, sequence, clock_period, res_idx=[1]):
     stage = []
     q = 0
     results = []
+
+    whoopy = True
     # print("length of tag_group_list: ", len(tag_group_list))
     #####
     Results = [0] * len(res_idx)
     # res_idx is which cycle of ~9 pulses to look at.
+    # that is, which cycle of the awg sequence to look at. Each AWG run sends 9 laser pulses.
     for x, idx in enumerate(res_idx):  # for now, idx is just 1
         current_list = tag_group_list[idx]
         results = []
         ######
         # print(current_list)
         for i, tag in enumerate(current_list):  # generalize later
+            if whoopy == True:
+                print("############ tag: ", tag)
+                whoopy = False ##########################
+                return 1 #########################
             if tag > end_time[-1]:
                 # tag is in extra region at the end of the sequence that doesn't corresponds to any data
                 break
@@ -1361,6 +1377,8 @@ def run_analysis(path_, file_, gt_path, R, debug=True, inter_path=None):
 
     slices, corr1, corr2 = find_pnr_correction(sequence_counts)
 
+    gm_data = find_gaussian_mixture(sequence_counts)
+
     viz_counts_and_correction(
         sequence_counts, slices, corr1, corr2, inter_path=inter_path, db=file_dB
     )
@@ -1399,11 +1417,13 @@ def run_analysis(path_, file_, gt_path, R, debug=True, inter_path=None):
             "number of nans in one axis of imgData: ",
             np.sum(np.isnan(imgData[:, 0])),
         )
-    imgData_corrected, _ = apply_pnr_correction(imgData, slices, corr1, corr2)
+
+    # imgData_corrected, _ = apply_pnr_correction(imgData, slices, corr1, corr2)
+
     if DEBUG:
         print(
-            "number of nan in imgData_corrected: ",
-            np.sum(np.isnan(imgData_corrected)),
+            "number of nan in imgData: ",
+            np.sum(np.isnan(imgData)),
         )
 
     # loop over the whole image
@@ -1424,7 +1444,10 @@ def run_analysis(path_, file_, gt_path, R, debug=True, inter_path=None):
             slice[1] - 50
         )  # weird that I need the 1000. see log for 8/25/21. some delay issue??
 
-        current_data_corrected = imgData_corrected[left:right]
+        # current_data_corrected = imgData_corrected[left:right]
+
+        current_data = imgData[left:right] #######
+
         dirtyClock_offset = histClock[left:right]
         dirtyClock_b = dirtyClock[left:right]
         dirty_clock_of1 = np.nanmean(dirtyClock_offset[dirtyClock_offset != 0])
@@ -1439,15 +1462,25 @@ def run_analysis(path_, file_, gt_path, R, debug=True, inter_path=None):
         # print("offs: ", dirty_clock_of1 - dirty_clock_offset_1)
 
         offs.append(dirty_clock_of1 - dirty_clock_offset_1)
-        current_data_corrected_1 = offset_tags_single(
-            current_data_corrected, offset_adjustment_1, CLOCK_PERIOD
+
+        current_data_1 = offset_tags_single_2d(
+            current_data, offset_adjustment_1, CLOCK_PERIOD
         )
+
         # current_data_corrected_2 = offset_tags_single(current_data_corrected, offset_adjustment_2, CLOCK_PERIOD)
         # I think res_idx is the cycle that is actually decoded. Apparently there can be as few as 3 to choose frm
 
-        results1, TT1, tgl_length = decode_ppm(
-            current_data_corrected_1, gt_path, i, CLOCK_PERIOD, res_idx=[1]
+        # return 1
+    
+
+        # results1, TT1, tgl_length = decode_ppm(
+        #     current_data_1, gt_path, i, CLOCK_PERIOD, gm_data, res_idx=[1]
+        # )
+        return decode_ppm(
+            current_data_1, gt_path, i, CLOCK_PERIOD, gm_data, res_idx=[1]
         )
+
+
         if DEBUG:
             print(results1)
         # we have a sorting problem on the 22dB dataset.
@@ -1531,10 +1564,11 @@ if __name__ == "__main__":
         offset = pair[1]
         results = run_analysis(path, name, gt_path, offset, inter_path="..//inter//")
 
-        results_bytes = orjson.dumps(results)
-        dB_stub = pair[0].split("_")[-1][:-8]
-        with open("..//inter//decode_20GHz" + dB_stub + ".json", "wb") as file:
-            file.write(results_bytes)
+        if results != 1:
+            results_bytes = orjson.dumps(results)
+            dB_stub = pair[0].split("_")[-1][:-8]
+            with open("..//inter//decode_20GHz" + dB_stub + ".json", "wb") as file:
+                file.write(results_bytes)
 
-        # to keep figures open
+            # to keep figures open
         input("Press Enter to exit...")
