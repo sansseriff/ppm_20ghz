@@ -1,0 +1,20 @@
+
+
+#######################################################
+
+THIS IS FOR 340s_.008_.050_Sept10_picScan_32.0.1.ttbin
+0.4312 with regular slope correction
+
+
+okay this is werid.... with a 0.1 offset of the gaussians I get 0.4328
+with a -0.11 I get 0.4329
+
+#######################################################
+
+340s_.008_.050_Sept10_picScan_22.0.1.ttbin
+regular slope correction: 0.870538
+0.8660 with -0.11 offset
+0.8417 with +0.11 offset
+
+0.877 with -0.05 offset
+0.8776 with -0.02

@@ -46,6 +46,7 @@ from scipy import ndimage
 
 from sklearn.mixture import GaussianMixture
 from dataclasses import dataclass
+from enum import Enum
 
 # Colors, palette = phd.viz.phd_style( data_width = 0.3, grid = True, axese_width=0.3, text = 2)
 matplotlib.rcParams["figure.dpi"] = 150
@@ -462,10 +463,11 @@ def offset_tags_single(data, offset, clock_period):
     data[less_than_mask] = data[less_than_mask] + clock_period
     return data
 
+
 def offset_tags_single_2d(data, offset, clock_period):
     data = data - offset
-    greater_than_mask = data[:,0] > clock_period + 50 / 2
-    less_than_mask = data[:,0] < -50 / 2
+    greater_than_mask = data[:, 0] > clock_period + 50 / 2
+    less_than_mask = data[:, 0] < -50 / 2
     data[greater_than_mask] = data[greater_than_mask] - clock_period
     data[less_than_mask] = data[less_than_mask] + clock_period
     return data
@@ -587,19 +589,53 @@ def find_pnr_correction(counts):
     return slices, corr1, corr2
 
 
+# @dataclass
+# class GMData:
+#     components: int
+#     component_list: list
+#     log_likelihoods: list
+#     covariances: np.ndarray
+#     means: np.ndarray
+#     weights: np.ndarray
+
 @dataclass
 class GMData:
+    num_components: int
+    log_likelihood: float
     covariances: np.ndarray
     means: np.ndarray
     weights: np.ndarray
 
 
-def find_gaussian_mixture(counts) -> GMData:
-    gm = GaussianMixture(n_components=20, random_state=42)
-    gm.fit(counts)
-    return GMData(gm.covariances_, gm.means_, gm.weights_)
+@dataclass
+class GMTotalData:
+    gm_list: list[GMData]
+    counts: np.ndarray
 
 
+def find_gaussian_mixture(counts) -> GMTotalData:
+    gaussians = np.arange(5, 50, 2).tolist()
+    # gaussians = [45, 55]
+    log_likelihoods = []
+    gms = []
+    for gauss_number in gaussians:
+        print("fitting gaussian mixture with ", gauss_number, " components")
+        gn = gauss_number
+        gm = GaussianMixture(n_components=gn, random_state=42)
+        gm.fit(counts)
+        lg = gm.score(counts)
+        log_likelihoods.append(lg)
+        gm_current = GMData(gn, lg, gm.covariances_, gm.means_, gm.weights_)
+        gms.append(gm_current)
+
+    if DEBUG:
+        plt.figure()
+        plt.plot(gaussians, log_likelihoods)
+        plt.title("find_gaussian_mixture")
+    return GMTotalData(gms, counts)
+
+
+@njit
 def gaussian_2d(x, y, cov, pos=(0, 0)):
     """Generate a 2D Gaussian distribution with a given covariance matrix and position."""
     # Unpack the position tuple
@@ -631,27 +667,94 @@ def gaussian_2d(x, y, cov, pos=(0, 0)):
     return gauss
 
 
-def find_gm_prob_for_offset(xy, offset_idx, gm_data: GMData, bin_width = 50,):
+@njit
+def find_gm_prob_for_offset(
+    xy,
+    offset_idx,
+    gm_means,
+    gm_covar,
+    gm_weights,
+    bin_width=50,
+):
     """given the gaussian mixture model for the distribution of counts
-    at a given offset index, find the probability of the count originating 
-    from the time slot with this offset. The offset index is a number of 
+    at a given offset index, find the probability of the count originating
+    from the time slot with this offset. The offset index is a number of
     bins, (probably 50 ps wide)
     """
     x = xy[0]
     y = xy[1]
     z = 0
 
-    offset = offset_idx*bin_width
+    offset = offset_idx * bin_width
 
-    for pos, covar, w in zip(gm_data.means, gm_data.covariances, gm_data.weights):
+    for pos, covar, w in zip(gm_means, gm_covar, gm_weights):
         z = z + gaussian_2d(x, y, covar, [pos[0] + offset, pos[1] + offset]) * w
 
+    return z
 
-def viz_counts_and_correction(counts, slices, corr1, corr2, inter_path=None, db=None):
+
+from matplotlib.patches import Ellipse
+
+
+def draw_ellipse(ax, position, covariance, **kwargs):
+    """Draw an ellipse with a given position and covariance"""
+    # ax = ax or plt.gca()
+
+    # Convert covariance to principal axes
+    if covariance.shape == (2, 2):
+        U, s, Vt = np.linalg.svd(covariance)
+        angle = np.degrees(np.arctan2(U[1, 0], U[0, 0]))
+        width, height = 2 * np.sqrt(s)
+    else:
+        angle = 0
+        width, height = 2 * np.sqrt(covariance)
+
+    # Draw the Ellipse
+    for nsig in np.linspace(0, 4, 8):
+        ax.add_patch(
+            Ellipse(
+                position,
+                nsig * width,
+                nsig * height,
+                angle=angle,
+                fill=False,
+                edgecolor="red",
+                alpha=0.3,
+            )
+        )
+
+
+def plot_gm_data(ax, gm_data: GMData, label=True, data_alpha=0.2, **ellipse_kwargs):
+    # ax = ax or plt.gca()
+    # labels = gmm.fit(X).predict(X)
+    # if label:
+    #     ax.scatter(X[:, 0], X[:, 1], c=labels, s=.01, cmap='viridis', zorder=2, alpha=data_alpha)
+    # else:
+    #     ax.scatter(X[:, 0], X[:, 1], s=.01, zorder=1, alpha=data_alpha, color='black')
+    # ax.axis('equal')
+
+    w_factor = 0.2 / gm_data.weights.max()
+
+    for pos, covar, w in zip(gm_data.means, gm_data.covariances, gm_data.weights):
+        draw_ellipse(ax, pos, covar, alpha=w * w_factor, **ellipse_kwargs)
+
+@dataclass
+class PNRHistCorrectionData:
+    counts: np.ndarray
+    corr1: np.ndarray
+    corr2: np.ndarray
+    bins: np.ndarray
+    slices: np.ndarray
+
+
+def viz_counts_and_correction(
+    counts, slices, corr1, corr2, gm_data, inter_path=None, db=None
+) -> PNRHistCorrectionData:
     print("LENGTH OF COUNTS: ", len(counts))
     bins = np.arange(-1000, 1000)
     if DEBUG:
-        fig, ax = plt.subplots(1, 2, figsize=(6, 4))
+        fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(8, 4))
+        # print("ax", ax)
         ax[0].hist2d(
             counts[:, 1] - counts[:, 0],
             counts[:, 0],
@@ -670,51 +773,17 @@ def viz_counts_and_correction(counts, slices, corr1, corr2, inter_path=None, db=
         ax[0].set_title("correction 1")
         ax[1].set_title("correction 2")
 
-        # fig, ax = plt.subplots(1, 2, figsize=(6, 4))
-        # ax[0].hist2d(
-        #     counts[:, 1] - counts[:, 0],
-        #     counts[:, 0]*1.7 - 0.7*counts[:, 1],
-        #     bins=(bins, bins),
-        #     norm=matplotlib.colors.LogNorm(),
-        # )
-        # ax[0].plot(slices[:-1], corr1, color="k")
+        ax[2].hist2d(
+            counts[:, 0],
+            counts[:, 1],
+            bins=(bins, bins),
+            norm=matplotlib.colors.LogNorm(),
+        )
+        plot_gm_data(ax[2], gm_data, data_alpha=0.1)
 
-        # ax[1].hist2d(
-        #     counts[:, 1] - counts[:, 0],
-        #     -0.7*counts[:, 0] + 1.7*counts[:, 1],
-        #     bins=(bins, bins),
-        #     norm=matplotlib.colors.LogNorm(),
-        # )
-        # ax[1].plot(slices[:-1], corr2, color="k")
-        # ax[0].set_title("correction 1")
-        # ax[1].set_title("correction 2")
 
-        # fig, ax = plt.subplots(1,1, figsize=(8,4))
-        # ax.hist(counts[:, 1] - counts[:, 0], bins = bins)
-
-        data = {
-            "counts": counts,
-            "corr1": corr1,
-            "corr2": corr2,
-            "bins": bins,
-            "slices": slices,
-        }
-        data_str = orjson.dumps(data, option=orjson.OPT_SERIALIZE_NUMPY)
-        if inter_path is not None:
-            if db is not None:
-                with open(
-                    os.path.join(inter_path, f"PNR_hist_correction_data_{db}.json"),
-                    "wb",
-                ) as file:
-                    file.write(data_str)
-            else:
-                with open(
-                    os.path.join(inter_path, "PNR_hist_correction_data.json"), "wb"
-                ) as file:
-                    file.write(data_str)
-        else:
-            with open("PNR_hist_correction_data.json", "wb") as file:
-                file.write(data_str)
+    d = PNRHistCorrectionData(counts, corr1, corr2, bins, slices)
+    return d
 
 
 def apply_pnr_correction(dual_data_nan, slices, corr1, corr2, seperated_arrays=False):
@@ -754,6 +823,15 @@ def apply_pnr_correction(dual_data_nan, slices, corr1, corr2, seperated_arrays=F
     else:
         return corrected1_nan, corrected2_nan
 
+@dataclass
+class CorrectionData:
+    corrected_hist1: np.array
+    corrected_hist2: np.array
+    corrected_bins: np.array
+    uncorrected_bins: np.array
+    uncorrected_hist1: np.array
+    uncorrected_hist2: np.array
+
 
 def viz_correction_effect(
     sequence_counts,
@@ -765,7 +843,7 @@ def viz_correction_effect(
     graph_data=None,
     file_db=None,
     inter_path=None,
-):
+) -> CorrectionData:
     if hist_set:
         corrected1, corrected2, array_list1, array_list2 = apply_pnr_correction(
             sequence_counts, slices, corr1, corr2, seperated_arrays=True
@@ -800,23 +878,23 @@ def viz_correction_effect(
     corrected_hist2 = hist2.tolist()
     corrected_bins = bins.tolist()
 
-    structure = {
-        "corrected_hist1": corrected_hist1,
-        "corrected_hist2": corrected_hist2,
-        "corrected_bins": corrected_bins,
-        "uncorrected_bins": graph_data[0],
-        "uncorrected_hist1": graph_data[1],
-        "uncorrected_hist2": graph_data[2],
-    }
-    struct = orjson.dumps(structure)
-    if inter_path is not None:
-        with open(
-            os.path.join(inter_path, f"decode_20GHz_histGraphs_{file_db}.json"), "wb"
-        ) as file:
-            file.write(struct)
-    else:
-        with open(f"decode_20GHz_histGraphs_{file_db}.json", "wb") as file:
-            file.write(struct)
+    # structure = {
+    #     "corrected_hist1": corrected_hist1,
+    #     "corrected_hist2": corrected_hist2,
+    #     "corrected_bins": corrected_bins,
+    #     "uncorrected_bins": graph_data[0],
+    #     "uncorrected_hist1": graph_data[1],
+    #     "uncorrected_hist2": graph_data[2],
+    # }
+    # struct = orjson.dumps(structure)
+    # if inter_path is not None:
+    #     with open(
+    #         os.path.join(inter_path, f"decode_20GHz_histGraphs_{file_db}.json"), "wb"
+    #     ) as file:
+    #         file.write(struct)
+    # else:
+    #     with open(f"decode_20GHz_histGraphs_{file_db}.json", "wb") as file:
+    #         file.write(struct)
 
     m = (corrected1 <= tbin / 2) & (corrected1 > -tbin / 2)
     print("ratio: ", m.sum() / len(corrected1))
@@ -834,6 +912,8 @@ def viz_correction_effect(
                     plt.plot(bins[1:], hist)
 
         print("iterations: ", i)
+
+    return CorrectionData(corrected_hist1, corrected_hist2, corrected_bins, graph_data[0], graph_data[1], graph_data[2])
 
 
 @njit
@@ -878,7 +958,51 @@ def using_clump(a):
     return list_of_arrays
 
 
-def decode_ppm(m_data_corrected, gt_path, sequence, clock_period, gm_data, res_idx=[1]):
+class Result(Enum):
+    CORRECT = "A"
+    INCORRECT = "B"
+    MISSING = "D"
+    INCORRECT_EXTRA = "C"
+    DEADTIME_ERROR = "E"
+
+
+@dataclass
+class Event:
+    result: Result
+    measured: int = -1
+    gaussian_measured: int = -1
+
+    true: int = -1
+    tag: int = -1
+    tag_x: int = -1
+    tag_y: int = -1
+
+
+def decode_ppm(
+    m_data_corrected,
+    dual_data,
+    gt_path: str,
+    sequence: int,
+    clock_period,
+    gm_data: GMData,
+    res_idx=[1,2,3,4,5,6,7,8,9,10],
+):
+    """Decode a list of tags (with maximum length equal to the number of pulses sent in one cycle by the AWG)
+    into a list of symbols.
+
+    Args:
+        m_data_corrected (np.ndarray 1D): a list of tags corrected with the simple slope-based correction
+        dual_data (np.ndarray 2D): the high and low trigger level tags, to be used for gaussian mixture correction
+        gt_path (str): path to the ground truth data
+        sequence (int): The 'run' number of the awg sequence. There's about 1000 to get through
+        clock_period (_type_): _description_
+        gm_data (GMData): datastructure containing the gaussian mixture model params
+        res_idx (list, optional): which cycle of each sequence to decode. A cycle is a repetition of the same
+        sequence by the AWG. Defaults to [1], as a simple setup only needs one cycle to decode the image
+
+    Returns:
+        _type_: _description_
+    """
     sequence_data, set_data = import_ground_truth(gt_path, sequence)
     dead_pulses = set_data["pulses_per_cycle"] - set_data["ppm"]["m_value"]
     dead_time_ps = dead_pulses * set_data["laser_time"] * 1e12
@@ -909,59 +1033,61 @@ def decode_ppm(m_data_corrected, gt_path, sequence, clock_period, gm_data, res_i
 
         initial_time = initial_time + pulses_per_cycle * laser_time
 
-
-    tag_group_list = seperate_by_nans_2d(m_data_corrected, 200)
+    tag_group_list_pre_corrected = seperate_by_nans(m_data_corrected, 200)
+    tag_group_list = seperate_by_nans_2d(dual_data, 200)
 
     if DEBUG:
         print("LENGTH OF TAG GROUP LIST: ", len(tag_group_list))
 
-    symbol_start = start_symbol_time[0]
-    symbol_end = end_time[0]
-    data_start = start_data_time[0]
-    true_p = true_pulse[0]
-    stage = []
-    q = 0
-    results = []
+    # print("LENGTH OF TAG GROUP LIST: ", len(tag_group_list))
 
-    whoopy = True
-    # print("length of tag_group_list: ", len(tag_group_list))
-    #####
     Results = [0] * len(res_idx)
-    # res_idx is which cycle of ~9 pulses to look at.
-    # that is, which cycle of the awg sequence to look at. Each AWG run sends 9 laser pulses.
     for x, idx in enumerate(res_idx):  # for now, idx is just 1
+
+        symbol_start = start_symbol_time[0]
+        symbol_end = end_time[0]
+        data_start = start_data_time[0]
+        true_p = true_pulse[0]
+        stage = []
+        stage_dual = []
+        q = 0
+        results: list[Event] = []
+
+
         current_list = tag_group_list[idx]
+        current_pre_corrected_list = tag_group_list_pre_corrected[idx]
         results = []
         ######
         # print(current_list)
-        for i, tag in enumerate(current_list):  # generalize later
-            if whoopy == True:
-                print("############ tag: ", tag)
-                whoopy = False ##########################
-                return 1 #########################
+        for i, (dual_tag, tag) in enumerate(
+            zip(current_list, current_pre_corrected_list)
+        ):  # generalize later
             if tag > end_time[-1]:
                 # tag is in extra region at the end of the sequence that doesn't corresponds to any data
+                # that's only likely if its the last tag. break.
                 break
             if tag > symbol_end + (
                 laser_time / 2
-            ):  # last slot (like 2047 or 1023) is at time symbol_end
-                # incude the len(stage) part so that we don't try to decode empty stage if 1st tag of sequence not found
-                # current stage is full. Process it.
+            ):  # at this point all the tags that fit inside the current symbol are loaded into stage
+                # process the stage
                 if len(stage) > 0:
                     results.append(
                         decode_symbol(
                             stage,
+                            stage_dual,
                             symbol_start,
                             symbol_end,
                             data_start,
                             true_p,
+                            gm_data,
                             laser_time,
                         )
                     )
                     stage = []
+                    stage_dual = []
                 else:
                     results.append(
-                        [-1, "D"]
+                        Event(result=Result.MISSING, true=true_p)
                     )  # tag correponds to a later symbol. The prev. symbol must be missing
 
                 # if sequence == 37:
@@ -987,148 +1113,271 @@ def decode_ppm(m_data_corrected, gt_path, sequence, clock_period, gm_data, res_i
                         ):
                             # found new region to fill
                             stage.append(tag)
+                            stage_dual.append(dual_tag)
 
                             # if last tag, process it now before checking for more
                             if i == len(current_list) - 1:
                                 results.append(
                                     decode_symbol(
                                         stage,
+                                        stage_dual,
                                         symbol_start,
                                         symbol_end,
                                         data_start,
                                         true_p,
+                                        gm_data,
                                         laser_time,
                                     )
                                 )
                             break
                         else:
                             # symbol passed with no data. append the vacuume identifier to results.
-                            results.append([-1, "D"])
+                            # results.append([-1, "D"])
+                            results.append(Event(result=Result.MISSING, true=true_p))
                     else:
                         # no more data found in this cycle.
-                        results.append([-1, "D"])
+                        results.append(Event(result=Result.MISSING, true=true_p))
                         break
 
             else:
                 stage.append(tag)
+                stage_dual.append(dual_tag)
 
                 # if last tag, process it now before checking for more
                 if i == len(current_list) - 1:
                     results.append(
                         decode_symbol(
                             stage,
+                            stage_dual,
                             symbol_start,
                             symbol_end,
                             data_start,
                             true_p,
+                            gm_data,
                             laser_time,
                         )
                     )
 
         still_missing = len(pulses_list) - len(results)
-        results.extend([[-1, "D"]] * still_missing)
-        ###################
+        results.extend([Event(result=Result.MISSING)] * still_missing)
 
-        # e = 0
-        # for item in results:
-        #     if item[1] == 'E':
-        #         e = e + 1
-
-        # if len(current_list) < e and e > 6:
-        #     print(results)
-        #     print(current_list)
-        #     viz_current_decoding(current_list, gt_path, 3200000, sequence, start = start_data_time, end = end_time)
-        #     print("##################################")
-
-        # if sequence == 10:
-        #     viz_current_decoding(current_list, gt_path, clock_period, sequence, start=start_data_time, end=end_time)
-
-        # if sequence == 37:
-        #     viz_current_decoding(current_list, gt_path, clock_period, sequence, start=start_data_time, end=end_time)
-        #     print("########## sequence: ", sequence)
-        #     print(current_list)
-        #     print(results)
-        #
-        # if sequence == 46:
-        #     viz_current_decoding(current_list, gt_path, clock_period, sequence, start=start_data_time, end=end_time)
-        #     print("########## sequence: ", sequence)
-        #     print(current_list)
-        #     print(results)
-        #
-        # if sequence == 118:
-        #     viz_current_decoding(current_list, gt_path, clock_period, sequence, start=start_data_time, end=end_time)
-        #     print("########## sequence: ", sequence)
-        #     print(current_list)
-        #     print(results)
-
-        # if len(results) != 9:
-        #     print(current_list)
-        #     viz_current_decoding(current_list, gt_path, 3200000, sequence)
-        #     print("symbol end: ", symbol_end)
         Results[x] = results
 
-    # print("ROBUST RESULT: ", results)
-    # move onto next PPM region
-    # print("tag group list 0: ", tag_group_list[0])
-    # print("tag group list 1: ", tag_group_list[1])
-    # print("tag group list 2: ", tag_group_list[2])
+    numb_crr = []
+    
+    for res in Results:
+        number_correct = 0
+        for event in res:
+            if event.result == Result.CORRECT:
+                number_correct = number_correct + 1
+        numb_crr.append(number_correct)
 
-    # print(len(tag_group_list))
-    # print(tag_group_list[1]) # don't use the 1st section, it may be partially filled.
-    # print("LENGTH OF TAG GROUP LIST 1: ", len(tag_group_list[1]))
+    # print([round(x, 2) for x in numb_crr])
 
-    # print("TAG GROUP LIST: ", tag_group_list)
-
-    # print("TAG GROUP LIST 2: ", tag_group_list[2])
-    # for i, tag in enumerate(tag_group_list[2]):
-    #     if len(tag_group_list[2]) == len(start_data_time):
-    #         tag = tag - start_data_time[i]
-    #         tag_group_list[2][i] = round(tag/50)
-    #
-    # if len(tag_group_list[2]) == len(start_data_time):
-    #     print("DATA TEST: ", tag_group_list[2])
-    #     print("GT: ", true_pulse)
-
-    tt = 0
-    for item in results:
-        if item[1] == "A":
-            tt = tt + 1
-
-    return Results, tt, len(tag_group_list)
+    return Results, numb_crr, len(tag_group_list)
 
 
-def decode_symbol(stage, symbol_start, symbol_end, data_start, true_p, laser_time):
+def correction_from_gaussian_model(estimate, dual_tag, gm_data: GMData, laser_time):
+    """_summary_
+
+    Args:
+        estimate (_type_): an index 0 to 2048 or 1024
+        dual_tag (_type_): _description_
+        gm_data (GMData): _description_
+        laser_time (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    offs = -0.00
+
+    prob_1 = find_gm_prob_for_offset(
+        dual_tag,
+        estimate - 4 + offs,
+        gm_data.means,
+        gm_data.covariances,
+        gm_data.weights,
+        bin_width=50,
+    )
+    prob_2 = find_gm_prob_for_offset(
+        dual_tag,
+        estimate - 3 + offs,
+        gm_data.means,
+        gm_data.covariances,
+        gm_data.weights,
+        bin_width=50,
+    )
+    prob_3 = find_gm_prob_for_offset(
+        dual_tag,
+        estimate - 2 + offs,
+        gm_data.means,
+        gm_data.covariances,
+        gm_data.weights,
+        bin_width=50,
+    )
+    prob_4 = find_gm_prob_for_offset(
+        dual_tag,
+        estimate - 1 + offs,
+        gm_data.means,
+        gm_data.covariances,
+        gm_data.weights,
+        bin_width=50,
+    )
+    prob_5 = find_gm_prob_for_offset(
+        dual_tag,
+        estimate - 0 + offs,
+        gm_data.means,
+        gm_data.covariances,
+        gm_data.weights,
+        bin_width=50,
+    )
+    prob_6 = find_gm_prob_for_offset(
+        dual_tag,
+        estimate + 1 + offs,
+        gm_data.means,
+        gm_data.covariances,
+        gm_data.weights,
+        bin_width=50,
+    )
+    prob_7 = find_gm_prob_for_offset(
+        dual_tag,
+        estimate + 2 + offs,
+        gm_data.means,
+        gm_data.covariances,
+        gm_data.weights,
+        bin_width=50,
+    )
+    prob_8 = find_gm_prob_for_offset(
+        dual_tag,
+        estimate + 3 + offs,
+        gm_data.means,
+        gm_data.covariances,
+        gm_data.weights,
+        bin_width=50,
+    )
+    prob_9 = find_gm_prob_for_offset(
+        dual_tag,
+        estimate + 4 + offs,
+        gm_data.means,
+        gm_data.covariances,
+        gm_data.weights,
+        bin_width=50,
+    )
+
+    # print("prob 1: ", prob_1, " prob 2: ", prob_2, " prob 3: ", prob_3)
+    largest_idx = np.argmax(
+        [prob_1, prob_2, prob_3, prob_4, prob_5, prob_6, prob_7, prob_8, prob_9]
+    )
+
+    return int(largest_idx - 4)
+    # return 0
+
+
+def decode_symbol(
+    stage,
+    stage_dual,
+    symbol_start,
+    symbol_end,
+    data_start,
+    true_p,
+    gm_data: GMData,
+    laser_time,
+):
     err = []
-    for tag in stage:
+    gaussian_err = []
+    err_tag = []
+    dual_err_tag = []
+
+    # for tag in stage:
+    for tag, dual_tag in zip(stage, stage_dual):
         if (tag > data_start - (laser_time / 2)) and (
             tag < symbol_end + (laser_time / 2)
         ):
             # options A or B
             solved = round((tag - data_start) / laser_time)
+
+            tag_from_start = tag - data_start
+            dual_tag_from_start = dual_tag - data_start
+
+            corr = correction_from_gaussian_model(
+                solved, dual_tag_from_start, gm_data, laser_time
+            )
+
+            gaussian_solved = solved + corr
+
             # if its correct and there haven't been
-            if solved == true_p:  # and len(err) == 0:
+            if gaussian_solved == true_p:  # and len(err) == 0:
                 if len(stage) > 1:
+                    # print("LONGER")
+                    # print("LONGER")
+                    # print("LONGER")
+                    # print("LONGER")
                     for i, tag in enumerate(stage):
                         stage[i] = round((tag - data_start) / laser_time)
-                    return [solved, "A"]  # ,stage]
+                    # return [solved, "A"]  # ,stage]
+
+                    return Event(
+                        measured=solved,
+                        gaussian_measured=gaussian_solved,
+                        true=true_p,
+                        result=Result.CORRECT,
+                        tag=tag_from_start,
+                        tag_x=dual_tag_from_start[0],
+                        tag_y=dual_tag_from_start[1],
+                    )
                 else:
-                    return [solved, "A"]
+                    # return [solved, "A"]
+                    return Event(
+                        measured=solved,
+                        gaussian_measured=gaussian_solved,
+                        true=true_p,
+                        result=Result.CORRECT,
+                        tag=tag_from_start,
+                        tag_x=dual_tag_from_start[0],
+                        tag_y=dual_tag_from_start[1],
+                    )
             else:
                 err.append(solved)
+                gaussian_err.append(gaussian_solved)
+                err_tag.append(tag_from_start)
+                dual_err_tag.append(dual_tag_from_start)
 
         else:
             # must be a tag in the deadtime
             # A, C, or E
             err.append(-1)
 
-    for error in err:
+    for error, gauss_error, ertg, dual_ertg in zip(
+        err, gaussian_err, err_tag, dual_err_tag
+    ):
         if (error != -1) and len(err) > 1:
-            return [error, true_p, "C"]
+            # return [error, true_p, "C"]
+            return Event(
+                measured=error,
+                gaussian_measured=gauss_error,
+                true=true_p,
+                result=Result.INCORRECT_EXTRA,
+                tag=ertg,
+                tag_x=dual_ertg[0],
+                tag_y=dual_ertg[1],
+            )
         if (error != -1) and len(err) == 1:
-            return [error, true_p, "B"]
+            # return [error, true_p, "B"]
+            return Event(
+                measured=error,
+                gaussian_measured=gauss_error,
+                true=true_p,
+                result=Result.INCORRECT,
+                tag=ertg,
+                tag_x=dual_ertg[0],
+                tag_y=dual_ertg[1],
+            )
 
     # if here, all errors are in the deadtime
-    return [-1, "E"]
+    # return [-1, "E"]
+    return Event(
+        measured=-1, gaussian_measured=-1, true=true_p, result=Result.DEADTIME_ERROR
+    )
 
 
 """
@@ -1279,7 +1528,34 @@ def simple_viz(array):
         plt.title("Simple Viz")
 
 
-def run_analysis(path_, file_, gt_path, R, debug=True, inter_path=None):
+def extend_results(master_results, sub_results):
+
+    #print("MASTER: ", master_results)
+    if master_results is None:
+        #print("maseter_results is None, and sub_results is: ", sub_results)
+        if type(sub_results[0]) is list:
+            return sub_results
+        else:
+            ls = []
+            for number in sub_results:
+                ls.append([number])
+            #print("CREATING MASTER: ", ls)
+            return ls
+    else:
+        assert len(master_results) == len(sub_results)
+        for inner_maser, inner_sub in zip(master_results, sub_results):
+            if type(inner_sub) is list:
+                inner_maser.extend(inner_sub)
+            else:
+                #print("inner master: ", inner_maser)
+                inner_maser.append(inner_sub)
+
+        #print("MASTER: ", master_results)
+        return master_results
+
+def run_analysis(
+    path_, file_, gt_path, R, debug=True, inter_path=None
+) -> tuple[list, GMTotalData, PNRHistCorrectionData, CorrectionData]:
     full_path = os.path.join(path_, file_)
     file_reader = FileReader(full_path)
 
@@ -1377,12 +1653,23 @@ def run_analysis(path_, file_, gt_path, R, debug=True, inter_path=None):
 
     slices, corr1, corr2 = find_pnr_correction(sequence_counts)
 
+    # print(corr1)
+    # print(corr2)
+
     gm_data = find_gaussian_mixture(sequence_counts)
 
-    viz_counts_and_correction(
-        sequence_counts, slices, corr1, corr2, inter_path=inter_path, db=file_dB
+    # print("GM data", gm_data.means)
+
+    hist_data = viz_counts_and_correction(
+        sequence_counts,
+        slices,
+        corr1,
+        corr2,
+        gm_data.gm_list[-1],
+        inter_path=inter_path,
+        db=file_dB,
     )
-    viz_correction_effect(
+    correction_data = viz_correction_effect(
         sequence_counts,
         slices,
         corr1,
@@ -1418,7 +1705,7 @@ def run_analysis(path_, file_, gt_path, R, debug=True, inter_path=None):
             np.sum(np.isnan(imgData[:, 0])),
         )
 
-    # imgData_corrected, _ = apply_pnr_correction(imgData, slices, corr1, corr2)
+    imgData_corrected, _ = apply_pnr_correction(imgData, slices, corr1, corr2)
 
     if DEBUG:
         print(
@@ -1428,13 +1715,14 @@ def run_analysis(path_, file_, gt_path, R, debug=True, inter_path=None):
 
     # loop over the whole image
     t1 = time.time()
-    TTS = []
-    results = [[]]  # inside should match res_idx
+    numbers_correct = None
+    results = None
     Diffs = []
     offs = []
     tag_group_lengths = []
     if DEBUG:
         print("Length of section list: ", len(section_list))
+
     for i, slice in enumerate(section_list[:-1]):
         if i == 0:  # fist section used only for calibration
             continue
@@ -1444,9 +1732,9 @@ def run_analysis(path_, file_, gt_path, R, debug=True, inter_path=None):
             slice[1] - 50
         )  # weird that I need the 1000. see log for 8/25/21. some delay issue??
 
-        # current_data_corrected = imgData_corrected[left:right]
+        current_data_corrected = imgData_corrected[left:right]
 
-        current_data = imgData[left:right] #######
+        current_data = imgData[left:right]  #######
 
         dirtyClock_offset = histClock[left:right]
         dirtyClock_b = dirtyClock[left:right]
@@ -1467,36 +1755,66 @@ def run_analysis(path_, file_, gt_path, R, debug=True, inter_path=None):
             current_data, offset_adjustment_1, CLOCK_PERIOD
         )
 
+        current_data_corrected_1 = offset_tags_single(
+            current_data_corrected, offset_adjustment_1, CLOCK_PERIOD
+        )
+
         # current_data_corrected_2 = offset_tags_single(current_data_corrected, offset_adjustment_2, CLOCK_PERIOD)
         # I think res_idx is the cycle that is actually decoded. Apparently there can be as few as 3 to choose frm
 
         # return 1
-    
 
-        # results1, TT1, tgl_length = decode_ppm(
-        #     current_data_1, gt_path, i, CLOCK_PERIOD, gm_data, res_idx=[1]
-        # )
-        return decode_ppm(
-            current_data_1, gt_path, i, CLOCK_PERIOD, gm_data, res_idx=[1]
+        results1, number_correct, tgl_length = decode_ppm(
+            current_data_corrected_1,
+            current_data_1,
+            gt_path,
+            i,
+            CLOCK_PERIOD,
+            gm_data.gm_list[-1],
+            res_idx=[1,2,3,4,5],
         )
 
-
         if DEBUG:
-            print(results1)
+            print(results1, end="\r")
         # we have a sorting problem on the 22dB dataset.
-        for res, master_res in zip(results1, results):
-            master_res.extend(res)
-        TTS.append(TT1)
+
+        #            results                 results1
+        #   [ [####master_res#####] ]      [ [##res##] ]
+        #   | [####master_res#####] |      | [##res##] |
+        #   | [####master_res#####] |      | [##res##] |
+        #   | [####master_res#####] |   +  | [##res##] |
+        #   | [####master_res#####] |      | [##res##] |
+        #   [ [####master_res#####] ]      [ [##res##] ]
+
+
+        results = extend_results(results, results1)
+        # for res, master_res in zip(results1, results):
+        #     master_res.extend(res)
+
+        numbers_correct = extend_results(numbers_correct, number_correct)
+
+        # numbers_correct.append(number_correct)
         tag_group_lengths.append(tgl_length)
 
     if DEBUG:
         print("loop time: ", time.time() - t1)
-    TTS = np.array(TTS)
-    print("ACCURACY: ", np.mean(TTS) / 9)
+    numbers_correct = np.array(numbers_correct)
+
+    print("ACCURACY: ", np.mean(numbers_correct[0]) / 9)
+    print("ACCURACY: ", np.mean(numbers_correct[1]) / 9)
+    print("ACCURACY: ", np.mean(numbers_correct[2]) / 9)
+    print("ACCURACY: ", np.mean(numbers_correct[3]) / 9)
     print("min of tag group lists: ", min(tag_group_lengths))
 
-    return results
+    return results, gm_data, hist_data, correction_data
 
+
+@dataclass
+class Out:
+    results: list[list[Event]]
+    gm_data: GMTotalData
+    hist_data: PNRHistCorrectionData
+    correction_data: CorrectionData
 
 if __name__ == "__main__":
     full_decode = False
@@ -1527,16 +1845,20 @@ if __name__ == "__main__":
         for pair in pair_list:
             name = pair[0]
             offset = pair[1]
-
-            results = run_analysis(
+            results, gm_data, hist_data, correction_data = run_analysis(
                 path, name, gt_path, offset, inter_path="..//inter//"
             )
-            results_bytes = orjson.dumps(results)
-
-            dB_stub = pair[0].split("_")[-1][:-8]
-            with open("..//inter//decode_20GHz" + dB_stub + ".json", "wb") as file:
-                file.write(results_bytes)
-            time.sleep(4)
+            out = Out(results, gm_data, hist_data, correction_data)
+            if results != 1:
+                results_bytes = orjson.dumps(
+                    out,
+                    default=lambda o: o.__dict__(),
+                    option=orjson.OPT_SERIALIZE_NUMPY,
+                )
+                dB_stub = pair[0].split("_")[-1][:-8]
+                with open("..//inter//decode_20GHz" + dB_stub + ".json", "wb") as file:
+                    file.write(results_bytes)
+            time.sleep(3)
 
     else:
         DEBUG = True
@@ -1545,9 +1867,9 @@ if __name__ == "__main__":
         # pair = ["340s_.008_.050_Sept10_picScan_16.0.1.ttbin", 9500000]
         # pair = ["340s_.008_.050_Sept10_picScan_18.0.1.ttbin", 9500000]
         # pair = ["340s_.008_.050_Sept10_picScan_20.0.1.ttbin", 9500000]
-        pair = ["340s_.008_.050_Sept10_picScan_22.0.1.ttbin", 9500000]
+        # pair = ["340s_.008_.050_Sept10_picScan_22.0.1.ttbin", 9500000]
         # pair = ["340s_.008_.050_Sept10_picScan_24.0.1.ttbin", 9500000]
-        # pair = ["340s_.008_.050_Sept10_picScan_26.0.1.ttbin", 7500000]
+        pair = ["340s_.008_.050_Sept10_picScan_26.0.1.ttbin", 7500000]
         # pair = ["340s_.008_.050_Sept10_picScan_28.0.1.ttbin", 6500000]
         # pair = ["340s_.008_.050_Sept10_picScan_30.0.1.ttbin", 5000000]
         # pair = ["340s_.008_.050_Sept10_picScan_32.0.1.ttbin", 4000000]
@@ -1562,10 +1884,18 @@ if __name__ == "__main__":
 
         name = pair[0]
         offset = pair[1]
-        results = run_analysis(path, name, gt_path, offset, inter_path="..//inter//")
+        # run_analysis(path, name, gt_path, offset, inter_path="..//inter//")
+        results, gm_data, hist_data, correction_data = run_analysis(
+            path, name, gt_path, offset, inter_path="..//inter//"
+        )
+        # out = {"results": results, "gm_data": gm_data}
+
+        out = Out(results, gm_data, hist_data, correction_data)
 
         if results != 1:
-            results_bytes = orjson.dumps(results)
+            results_bytes = orjson.dumps(
+                out, default=lambda o: o.__dict__(), option=orjson.OPT_SERIALIZE_NUMPY
+            )
             dB_stub = pair[0].split("_")[-1][:-8]
             with open("..//inter//decode_20GHz" + dB_stub + ".json", "wb") as file:
                 file.write(results_bytes)
