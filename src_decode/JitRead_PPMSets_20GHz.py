@@ -598,6 +598,7 @@ def find_pnr_correction(counts):
 #     means: np.ndarray
 #     weights: np.ndarray
 
+
 @dataclass
 class GMData:
     num_components: int
@@ -738,6 +739,7 @@ def plot_gm_data(ax, gm_data: GMData, label=True, data_alpha=0.2, **ellipse_kwar
     for pos, covar, w in zip(gm_data.means, gm_data.covariances, gm_data.weights):
         draw_ellipse(ax, pos, covar, alpha=w * w_factor, **ellipse_kwargs)
 
+
 @dataclass
 class PNRHistCorrectionData:
     counts: np.ndarray
@@ -781,7 +783,6 @@ def viz_counts_and_correction(
         )
         plot_gm_data(ax[2], gm_data, data_alpha=0.1)
 
-
     d = PNRHistCorrectionData(counts, corr1, corr2, bins, slices)
     return d
 
@@ -822,6 +823,7 @@ def apply_pnr_correction(dual_data_nan, slices, corr1, corr2, seperated_arrays=F
         return corrected1_nan, corrected2_nan, array_list1, array_list2
     else:
         return corrected1_nan, corrected2_nan
+
 
 @dataclass
 class CorrectionData:
@@ -878,24 +880,6 @@ def viz_correction_effect(
     corrected_hist2 = hist2.tolist()
     corrected_bins = bins.tolist()
 
-    # structure = {
-    #     "corrected_hist1": corrected_hist1,
-    #     "corrected_hist2": corrected_hist2,
-    #     "corrected_bins": corrected_bins,
-    #     "uncorrected_bins": graph_data[0],
-    #     "uncorrected_hist1": graph_data[1],
-    #     "uncorrected_hist2": graph_data[2],
-    # }
-    # struct = orjson.dumps(structure)
-    # if inter_path is not None:
-    #     with open(
-    #         os.path.join(inter_path, f"decode_20GHz_histGraphs_{file_db}.json"), "wb"
-    #     ) as file:
-    #         file.write(struct)
-    # else:
-    #     with open(f"decode_20GHz_histGraphs_{file_db}.json", "wb") as file:
-    #         file.write(struct)
-
     m = (corrected1 <= tbin / 2) & (corrected1 > -tbin / 2)
     print("ratio: ", m.sum() / len(corrected1))
 
@@ -913,7 +897,14 @@ def viz_correction_effect(
 
         print("iterations: ", i)
 
-    return CorrectionData(corrected_hist1, corrected_hist2, corrected_bins, graph_data[0], graph_data[1], graph_data[2])
+    return CorrectionData(
+        corrected_hist1,
+        corrected_hist2,
+        corrected_bins,
+        graph_data[0],
+        graph_data[1],
+        graph_data[2],
+    )
 
 
 @njit
@@ -985,7 +976,7 @@ def decode_ppm(
     sequence: int,
     clock_period,
     gm_data: GMData,
-    res_idx=[1,2,3,4,5,6,7,8,9,10],
+    res_idx=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
 ):
     """Decode a list of tags (with maximum length equal to the number of pulses sent in one cycle by the AWG)
     into a list of symbols.
@@ -1043,7 +1034,6 @@ def decode_ppm(
 
     Results = [0] * len(res_idx)
     for x, idx in enumerate(res_idx):  # for now, idx is just 1
-
         symbol_start = start_symbol_time[0]
         symbol_end = end_time[0]
         data_start = start_data_time[0]
@@ -1052,7 +1042,6 @@ def decode_ppm(
         stage_dual = []
         q = 0
         results: list[Event] = []
-
 
         current_list = tag_group_list[idx]
         current_pre_corrected_list = tag_group_list_pre_corrected[idx]
@@ -1164,7 +1153,7 @@ def decode_ppm(
         Results[x] = results
 
     numb_crr = []
-    
+
     for res in Results:
         number_correct = 0
         for event in res:
@@ -1529,17 +1518,16 @@ def simple_viz(array):
 
 
 def extend_results(master_results, sub_results):
-
-    #print("MASTER: ", master_results)
+    # print("MASTER: ", master_results)
     if master_results is None:
-        #print("maseter_results is None, and sub_results is: ", sub_results)
+        # print("maseter_results is None, and sub_results is: ", sub_results)
         if type(sub_results[0]) is list:
             return sub_results
         else:
             ls = []
             for number in sub_results:
                 ls.append([number])
-            #print("CREATING MASTER: ", ls)
+            # print("CREATING MASTER: ", ls)
             return ls
     else:
         assert len(master_results) == len(sub_results)
@@ -1547,11 +1535,12 @@ def extend_results(master_results, sub_results):
             if type(inner_sub) is list:
                 inner_maser.extend(inner_sub)
             else:
-                #print("inner master: ", inner_maser)
+                # print("inner master: ", inner_maser)
                 inner_maser.append(inner_sub)
 
-        #print("MASTER: ", master_results)
+        # print("MASTER: ", master_results)
         return master_results
+
 
 def run_analysis(
     path_, file_, gt_path, R, debug=True, inter_path=None
@@ -1573,9 +1562,7 @@ def run_analysis(
         print("CLOCK PERIOD: ", CLOCK_PERIOD)
 
     # FOR ALIGNING PHASES OF COUNTS AND REFERENCE CLOCK
-    t1 = time.time()
     hist_tags = histScan(channels[R : R + 300000], timetags[R : R + 300000], -5, -14, 9)
-    t2 = time.time()
     bins = np.arange(int(np.max(hist_tags)))
 
     ref_offset = find_rough_offset(hist_tags, 0, gt_path, resolution=800000)
@@ -1771,7 +1758,7 @@ def run_analysis(
             i,
             CLOCK_PERIOD,
             gm_data.gm_list[-1],
-            res_idx=[1,2,3,4,5],
+            res_idx=[1, 2, 3, 4, 5],
         )
 
         if DEBUG:
@@ -1785,7 +1772,6 @@ def run_analysis(
         #   | [####master_res#####] |   +  | [##res##] |
         #   | [####master_res#####] |      | [##res##] |
         #   [ [####master_res#####] ]      [ [##res##] ]
-
 
         results = extend_results(results, results1)
         # for res, master_res in zip(results1, results):
@@ -1815,6 +1801,7 @@ class Out:
     gm_data: GMTotalData
     hist_data: PNRHistCorrectionData
     correction_data: CorrectionData
+
 
 if __name__ == "__main__":
     full_decode = False
