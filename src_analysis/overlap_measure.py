@@ -69,7 +69,7 @@ class BiGauss(object):
 
         pdf_mu1 = self.pdf(self.mu1)
         pdf_mu2 = self.pdf(self.mu2)
-        return p_min / min(pdf_mu1, pdf_mu2) if p_min < min(pdf_mu1, pdf_mu2) else 1.0
+        return p_min / min(pdf_mu1, pdf_mu2) if p_min < min(pdf_mu1, pdf_mu2) else 1.0, []
 
     # get y given x, satisfying (x,y) is on ridge curve (RC)
     def RC(self, x):
