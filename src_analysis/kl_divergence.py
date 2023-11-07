@@ -1,6 +1,7 @@
 import numpy as np
 import scipy
 
+# source https://gist.github.com/ChuaCheowHuan/18977a3e77c0655d945e8af60633e4df
 
 def kl_mvn(to, fr):
     """Calculate `KL(to||fr)`, where `to` and `fr` are pairs of means and covariance matrices"""
