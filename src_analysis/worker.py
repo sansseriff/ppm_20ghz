@@ -12,6 +12,19 @@ class DecodingChoice(Enum):
 
 
 def decode_results(decode: Decode, choice: DecodingChoice, slice=0, offset: float = 0.0):
+    """loop over a list of events inside of Decode.results and check if the measurements
+    based on either the SLOPE method or the GMM method are correct or incorrect.
+
+    Args:
+        decode (Decode): datastructure containing all data from the main PPM decoding process
+        choice (DecodingChoice): decode using the GMM or the SLOPE method?
+        slice (int, optional): Decode.results is a list of list. Each inner list is a full set of events
+        to decode the image. There are multiple inner lists because each AWG sequence was repeated multiple times.
+        offset (float, optional): Offset of the data w.r.t the clock. 
+
+    Returns:
+        _type_: list of events updated with the new offset value. Same format style as the input Decode.results[0]
+    """
     results = decode.results[slice]
     gm_data = decode.gm_data.gm_list[10]
 
@@ -103,6 +116,19 @@ class DecodingResults(BaseModel):
 
 
 def stack_decode_results(decode: Decode, choice: DecodingChoice, stack: int, offset: float = 0.0):
+    """decode multiple stacks with custom offset value. This is used to find the optimal offset value in 
+    the caller function. Events from the added slices are just appended to the end of the output list.
+    Because this list is just used to check relative decoding success fraction. 
+
+    Args:
+        decode (Decode): datastructure containing all data from the main PPM decoding process
+        choice (DecodingChoice): decode using the GMM or the SLOPE method?
+        stack (int): number of slices to decode
+        offset (float, optional): Offset of the data w.r.t the clock. Defaults to 0.0.
+
+    Returns:
+        _type_: _description_
+    """
     new_results = []
     missing_results = []
     for sl in range(stack):
