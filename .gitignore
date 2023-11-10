@@ -7,6 +7,9 @@
 !.gitignore
 !.github/
 
+!/figs/gmm_intro_analysis_t_dark.svg
+!/figs/gmm_intro_analysis_t_light.svg
+
 *__pycache__
 
 *.svg
