@@ -4,15 +4,17 @@
 /figs/*
 !/data/.gitkeep
 !/inter/.gitkeep
+!/figs/.gitkeep
+!/figs/gmm_intro_analysis_t_dark.svg
+!/figs/gmm_intro_analysis_t_light.svg
 !.gitignore
 !.github/
 
-!/figs/gmm_intro_analysis_t_dark.svg
-!/figs/gmm_intro_analysis_t_light.svg
+
 
 *__pycache__
 
-*.svg
+# *.svg
 *.pdf
 *.jpg
 *.jpeg
