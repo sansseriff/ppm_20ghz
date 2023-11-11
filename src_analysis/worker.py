@@ -11,7 +11,7 @@ class DecodingChoice(Enum):
 
 
 
-def decode_results(decode: Decode, choice: DecodingChoice, slice=0, offset: float = 0.0):
+def decode_results(decode: Decode, choice: DecodingChoice, slice=0, offset: float = 0.0) -> tuple[list[Event], list[Event]]:
     """loop over a list of events inside of Decode.results and check if the measurements
     based on either the SLOPE method or the GMM method are correct or incorrect.
 

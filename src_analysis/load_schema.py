@@ -23,6 +23,9 @@ class Event(BaseModel):
 
 
 class GMData(BaseModel):
+    """stores data for gaussian mixture that models detector response for a given mean photon rate.
+    Contains gaussians that model multiple photon number groupings
+    """
     num_components: int
     log_likelihood: float
     covariances: list
@@ -30,6 +33,24 @@ class GMData(BaseModel):
     weights: list
 
     @validator('covariances', 'means', 'weights')
+    def to_numpy_array(cls, v):
+        if isinstance(v, list):
+            return np.array(v)
+        return v
+    
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class GMDataPhotonCommunity(BaseModel):
+    """stores data for gaussian mixture that models ONE PNR grouping
+    """
+    photon_num_components: int
+    photon_covariances: list
+    photon_means: list
+    photon_weights: list
+
+    @validator('photon_covariances', 'photon_means', 'photon_weights')
     def to_numpy_array(cls, v):
         if isinstance(v, list):
             return np.array(v)
