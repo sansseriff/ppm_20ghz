@@ -11,6 +11,13 @@ class Result(Enum):
     INCORRECT_EXTRA = "C"
     DEADTIME_ERROR = "E"
 
+
+class PhotonNumberMeasurement(BaseModel):
+    guess: int
+    probability: float
+    correction: int
+    measured: int | None = None
+
 class Event(BaseModel):
     result: Result
     measured: int = -1
@@ -20,6 +27,9 @@ class Event(BaseModel):
     tag: float = -1.0
     tag_x: float = -1.0
     tag_y: float = -1.0
+    pnr_best: PhotonNumberMeasurement | None = None
+    pnr_2nd_best: PhotonNumberMeasurement | None = None
+
 
 
 class GMData(BaseModel):

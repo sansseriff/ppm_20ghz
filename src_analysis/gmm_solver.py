@@ -5,6 +5,9 @@ from enum import Enum
 from pydantic import BaseModel, validator
 
 from load_schema import GMData, Result, Event
+from util import PhotonGMData, GMDataPhotonCommunity
+
+from load_schema import PhotonNumberMeasurement
 
 
 @njit
@@ -38,6 +41,7 @@ def gaussian_2d(x, y, cov, pos=(0, 0)):
 
     return gauss
 
+
 @njit
 def find_gm_prob_for_offset(
     xy,
@@ -64,7 +68,80 @@ def find_gm_prob_for_offset(
     return z
 
 
-def correction_from_gaussian_model(estimate, dual_tag, gm_data: GMData, laser_time, offset = 0.0):
+# def arrival_correction_and_pnr_from_gaussian_model(estimate, dual_tag,
+
+
+def photon_data_from_gaussian_model(
+    ls: list[PhotonGMData], dual_tag, estimate_idx, laser_time=50
+):
+    photon_probabilities = []
+    for community in ls:
+        community = community.gm_photon
+        photon_probabilities.append(
+            find_gm_prob_for_offset(
+                dual_tag,
+                estimate_idx,
+                community.photon_means,
+                community.photon_covariances,
+                community.photon_weights,
+                bin_width=laser_time,
+            )
+        )
+
+    photon_numbers = np.arange(1, len(photon_probabilities) + 1).tolist()
+
+    return photon_numbers, photon_probabilities
+
+
+def pnr_correction_from_gaussian_model(
+    estimate, dual_tag, gm_data: list[PhotonGMData], laser_time=50, offset=0.0
+) -> tuple[PhotonNumberMeasurement, PhotonNumberMeasurement]:
+    
+    assert isinstance(gm_data, list)
+    assert isinstance(gm_data[0], PhotonGMData)
+    ofs = [-1, 0, 1]
+
+    full_photon_numbers = []
+    full_photon_probs = []
+    full_arrival_time_idx_list = []
+    idx = 0
+    for of in ofs:
+        arrival_time_idx = idx
+        photon_numbers, photon_probs = photon_data_from_gaussian_model(
+            gm_data, dual_tag, estimate + of + offset, laser_time
+        )
+        arrival_time_idx_list = [arrival_time_idx] * len(photon_probs)
+        full_photon_numbers.extend(photon_numbers)
+        full_photon_probs.extend(photon_probs)
+        full_arrival_time_idx_list.extend(arrival_time_idx_list)
+        idx += 1
+
+    sorted_args = np.argsort(full_photon_probs)
+    best_photon_number = full_photon_numbers[sorted_args[-1]]
+    best_2nd_photon_number = full_photon_numbers[sorted_args[-2]]
+    best_time_idx = ofs[
+        full_arrival_time_idx_list[sorted_args[-1]]
+    ]  # ofs is -1 to 1, arrival_time_idx_list is 0 to 2
+    best_2nd_time_idx = ofs[full_arrival_time_idx_list[sorted_args[-2]]]
+    best_prob = full_photon_probs[sorted_args[-1]]
+    best_2nd_prob = full_photon_probs[sorted_args[-2]]
+
+    pnr_best = PhotonNumberMeasurement(
+        guess=best_photon_number, probability=best_prob, correction=best_time_idx, measured=None
+    )
+    pnr_2nd_best = PhotonNumberMeasurement(
+        guess=best_2nd_photon_number,
+        probability=best_2nd_prob,
+        correction=best_2nd_time_idx,
+        measured=None,
+    )
+
+    return pnr_best, pnr_2nd_best
+
+
+def correction_from_gaussian_model(
+    estimate, dual_tag, gm_data: GMData, laser_time=50, offset=0.0
+):
     """_summary_
 
     Args:
@@ -102,12 +179,9 @@ def correction_from_gaussian_model(estimate, dual_tag, gm_data: GMData, laser_ti
         gm_data.weights,
         bin_width=50,
     )
-    
 
     # print("prob 1: ", prob_1, " prob 2: ", prob_2, " prob 3: ", prob_3)
-    largest_idx = np.argmax(
-        [prob_4, prob_5, prob_6]
-    )
+    largest_idx = np.argmax([prob_4, prob_5, prob_6])
 
     return int(largest_idx - 1)
     # return 0

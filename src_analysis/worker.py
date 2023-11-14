@@ -1,7 +1,9 @@
 import numpy as np
 from load_schema import *
-from gmm_solver import correction_from_gaussian_model
+from gmm_solver import correction_from_gaussian_model, pnr_correction_from_gaussian_model
 from enum import Enum
+
+from util import PhotonGMData
 
 class DecodingChoice(Enum):
     GMM = 1
@@ -11,7 +13,7 @@ class DecodingChoice(Enum):
 
 
 
-def decode_results(decode: Decode, choice: DecodingChoice, slice=0, offset: float = 0.0) -> tuple[list[Event], list[Event]]:
+def decode_results(decode: Decode, choice: DecodingChoice, slice=0, offset: float = 0.0, sim_data: list[PhotonGMData] = None) -> tuple[list[Event], list[Event]]:
     """loop over a list of events inside of Decode.results and check if the measurements
     based on either the SLOPE method or the GMM method are correct or incorrect.
 
@@ -26,8 +28,8 @@ def decode_results(decode: Decode, choice: DecodingChoice, slice=0, offset: floa
         _type_: list of events updated with the new offset value. Same format style as the input Decode.results[0]
     """
     results = decode.results[slice]
-    gm_data = decode.gm_data.gm_list[10]
-
+    # if sim_data is None:
+    gm_data = decode.gm_data.gm_list[10] # pick a reasonably high number of gaussians for the GMM
     new_results = []
     missing_results = []
     for event in results:
@@ -35,33 +37,72 @@ def decode_results(decode: Decode, choice: DecodingChoice, slice=0, offset: floa
         if event.result != Result.MISSING:
             # then we have data to re-analyze with the gmm and a variable offset
             if choice == DecodingChoice.GMM:
-                gauss_correction = correction_from_gaussian_model(
+                if sim_data is None:
+                    #regular GMM decoding
+                    gm_data = decode.gm_data.gm_list[10] # pick a reasonably high number of gaussians for the GMM
+                    gauss_correction = correction_from_gaussian_model(
+                        event.measured,
+                        (event.tag_x, event.tag_y),
+                        gm_data,
+                        laser_time=50,
+                        offset=offset,
+                    )
+
+                    gaussian_measured = event.measured + gauss_correction
+
+                    if gaussian_measured == event.true:
+                        res = Result.CORRECT
+                    if gaussian_measured != event.true:
+                        res = Result.INCORRECT
+
+                    new_results.append(
+                        Event(
+                            tag_x=event.tag_x,
+                            tag_y=event.tag_y,
+                            tag=event.tag,
+                            true=event.true,
+                            measured=event.measured,
+                            gaussian_measured=gaussian_measured,
+                            result=res,
+                        )
+                    )
+                else:
+                    # pnr GMM decoding
+                    gm_data = sim_data
+                    ###
+                    pnr_best, pnr_2nd_best = pnr_correction_from_gaussian_model(
                     event.measured,
                     (event.tag_x, event.tag_y),
                     gm_data,
                     laser_time=50,
                     offset=offset,
-                )
-
-                gaussian_measured = event.measured + gauss_correction
-
-                if gaussian_measured == event.true:
-                    res = Result.CORRECT
-                if gaussian_measured != event.true:
-                    res = Result.INCORRECT
-
-                new_results.append(
-                    Event(
-                        tag_x=event.tag_x,
-                        tag_y=event.tag_y,
-                        tag=event.tag,
-                        true=event.true,
-                        measured=event.measured,
-                        gaussian_measured=gaussian_measured,
-                        result=res,
                     )
-                )
 
+                    gaussian_measured = event.measured + pnr_best.correction
+
+                    if gaussian_measured == event.true:
+                        res = Result.CORRECT
+                    if gaussian_measured != event.true:
+                        res = Result.INCORRECT
+
+                    #update pnr_best and pnr_2nd_best with new measured value
+                    pnr_best.measured = event.measured + pnr_best.correction
+                    pnr_2nd_best.measured = event.measured + pnr_2nd_best.correction
+
+                    new_results.append(
+                        Event(
+                            tag_x=event.tag_x,
+                            tag_y=event.tag_y,
+                            tag=event.tag,
+                            true=event.true,
+                            measured=event.measured,
+                            gaussian_measured=gaussian_measured,
+                            result=res,
+                            pnr_best=pnr_best,
+                            pnr_2nd_best=pnr_2nd_best,
+
+                        )
+                    )
             elif choice == DecodingChoice.SLOPE:
                 new_slope_solution = round((event.tag + offset) / 50)
 
@@ -80,11 +121,9 @@ def decode_results(decode: Decode, choice: DecodingChoice, slice=0, offset: floa
                         result=res,
                     )
                 )
-            
-
-           
         else:
             missing_results.append(event)
+
     return new_results, missing_results
 
 
@@ -103,19 +142,19 @@ class Res(BaseModel):
 
 
 class CallerResults(BaseModel):
-    max_offset: float
-    list_cc: list
-    list_org_cc: list
-    offsets: list
-    gmm_optimized_results: Res
-    slope_optimized_results: Res
+    max_offset: float | None = None
+    list_cc: list | None = None
+    list_org_cc: list | None = None
+    offsets: list | None = None
+    gmm_optimized_results: Res | None = None
+    slope_optimized_results: Res | None = None
 
 
 class DecodingResults(BaseModel):
         list_caller_results: list[CallerResults]
 
 
-def stack_decode_results(decode: Decode, choice: DecodingChoice, stack: int, offset: float = 0.0):
+def stack_decode_results(decode: Decode, choice: DecodingChoice, stack: int, offset: float = 0.0, sim_data: list[PhotonGMData]=None):
     """decode multiple stacks with custom offset value. This is used to find the optimal offset value in 
     the caller function. Events from the added slices are just appended to the end of the output list.
     Because this list is just used to check relative decoding success fraction. 
@@ -132,7 +171,7 @@ def stack_decode_results(decode: Decode, choice: DecodingChoice, stack: int, off
     new_results = []
     missing_results = []
     for sl in range(stack):
-        new, missing = decode_results(decode, choice=choice, slice=sl, offset=offset)
+        new, missing = decode_results(decode, choice=choice, slice=sl, offset=offset, sim_data=sim_data)
         new_results.extend(new)
         missing_results.extend(missing)
     return new_results, missing_results
@@ -187,6 +226,72 @@ def caller(decode: Decode):
         gmm_optimized_results=res_gmm,
         slope_optimized_results=res_slope,
     )
+
+
+def pnr_caller(data: tuple[Decode, list[PhotonGMData], float | None]):
+    decode: Decode = data[0]
+    sim_data: list[PhotonGMData] = data[1]
+    offset_param = data[2]
+
+    print("this is offset param: ", offset_param)
+
+    if offset_param is not None:
+        stack = 5
+        new_results, missing_results = stack_decode_results(decode, choice = DecodingChoice.GMM, stack=stack, offset=offset_param, sim_data=sim_data)
+        res_gmm = Res(empty=missing_results, filled=new_results)
+        return CallerResults(
+            max_offset=offset_param,
+            gmm_optimized_results=res_gmm)
+
+    list_cc = []
+    list_org_cc = []
+    max_offsets_vs_dB = []
+    stack = 3
+
+    offsets = np.arange(-0.19, 0.04, 0.0025).tolist()
+    for offset in offsets:
+        # new_results, missing_results = decode_results(decode, choice = DecodingChoice.GMM, slice=0, offset=offset)
+        new_results, missing_results = stack_decode_results(decode, choice = DecodingChoice.GMM, stack=stack, offset=offset, sim_data=sim_data)
+        cc = 0
+        for event in new_results:
+            if event.result == Result.CORRECT:
+                cc += 1
+
+        # new_results, missing_results = decode_results(decode, choice = DecodingChoice.SLOPE, slice=0, offset=0)
+        new_results, missing_results = stack_decode_results(decode, choice = DecodingChoice.SLOPE, stack=stack, offset=0, sim_data=sim_data)
+        org_cc = 0
+        for event in new_results:
+            if event.result == Result.CORRECT:
+                org_cc += 1
+        
+        cc = cc / len(new_results)
+        org_cc = org_cc / len(new_results)
+        list_cc.append(cc)
+        list_org_cc.append(org_cc)
+        print(f"cc: {round(cc,4)}, org_cc: {round(org_cc,4)}, offset: {offset}")
+
+    max_offset = offsets[np.argmax(list_cc)]
+    max_offset_regular = offsets[np.argmax(list_org_cc)]
+    max_offsets_vs_dB.append(max_offset)
+
+    new_results, missing_results = stack_decode_results(decode, choice = DecodingChoice.GMM, stack=stack, offset=max_offset)
+
+    res_gmm = Res(empty=missing_results, filled=new_results)
+
+    new_results, missing_results = stack_decode_results(decode, choice = DecodingChoice.SLOPE, stack=stack, offset=max_offset_regular)
+
+    res_slope = Res(empty=missing_results, filled=new_results)
+
+
+    return CallerResults(
+        max_offset=max_offset,
+        list_cc=list_cc,
+        list_org_cc=list_org_cc,
+        offsets=offsets,
+        gmm_optimized_results=res_gmm,
+        slope_optimized_results=res_slope,
+    )
+
 
 
 
