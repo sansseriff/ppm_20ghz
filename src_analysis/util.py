@@ -6,8 +6,11 @@ from pydantic import BaseModel
 import networkx as nx
 from kl_divergence import kl_mvn
 import math
+import matplotlib.pyplot as plt
+import load_schema
 
 import colorsys
+
 
 def gaussian_2d(x, y, cov, pos=(0, 0)):
     """Generate a 2D Gaussian distribution with a given covariance matrix and position."""
@@ -38,7 +41,6 @@ def gaussian_2d(x, y, cov, pos=(0, 0)):
     gauss = norm_const * np.exp(exponent)
 
     return gauss
-
 
 
 class PhotonGMData(BaseModel):
@@ -141,7 +143,9 @@ def photon_number_bifurcate_gm_data(
             photon_num_components=len(st),
         )
         center_of_mass = np.average(means, weights=weights, axis=0)
-        pgm = PhotonGMData(center_of_mass=center_of_mass, gm_photon=photon_number_gm_data)
+        pgm = PhotonGMData(
+            center_of_mass=center_of_mass, gm_photon=photon_number_gm_data
+        )
 
         photon_gm_datas.append(pgm)
 
@@ -195,27 +199,33 @@ class PhotonGMData(BaseModel):
 
 
 def poisson(mean_photon_number, k, stop_at=5):
-
     if k < stop_at:
-        return np.exp(-mean_photon_number) * mean_photon_number ** k / math.factorial(k)
+        return np.exp(-mean_photon_number) * mean_photon_number**k / math.factorial(k)
     if k >= stop_at:
         under = 0
         for j in range(stop_at):
-            under += np.exp(-mean_photon_number) * mean_photon_number ** j / math.factorial(j)
+            under += (
+                np.exp(-mean_photon_number)
+                * mean_photon_number**j
+                / math.factorial(j)
+            )
 
         return 1 - under
 
 
-
 class StaticSimulation:
-    """an object for storing and operating on a model of the detector response in 2D (t_a and t_b axese) as a function of mean photon number. 
+    """an object for storing and operating on a model of the detector response in 2D (t_a and t_b axese) as a function of mean photon number.
     It is created from a gaussian mixture model fit to the detector response at a particular mean photon number for which all the well-discernable
-    and seperable photon number groupings can be identified and modeled. 
+    and seperable photon number groupings can be identified and modeled.
     """
+
     def __init__(self, data: list[PhotonGMData]):
         self.data: list[PhotonGMData] = data
-        self.single_photon_com = np.average(self.data[0].gm_photon.photon_means, weights=self.data[0].gm_photon.photon_weights, axis=0)
-
+        self.single_photon_com = np.average(
+            self.data[0].gm_photon.photon_means,
+            weights=self.data[0].gm_photon.photon_weights,
+            axis=0,
+        )
 
     @classmethod
     def from_json(cls, filepath: str):
@@ -223,29 +233,39 @@ class StaticSimulation:
             data = orjson.loads(f.read())
             data = [PhotonGMData(**d) for d in data]
             return cls(data)
-        
+
     def to_json(self, filepath: str):
         with open(filepath, "w") as f:
-            f.write(orjson.dumps([d.model_dump() for d in self.data], option=orjson.OPT_SERIALIZE_NUMPY).decode())
-
+            f.write(
+                orjson.dumps(
+                    [d.model_dump() for d in self.data],
+                    option=orjson.OPT_SERIALIZE_NUMPY,
+                ).decode()
+            )
 
     def scale_simulation_to_match_mfr(self, mean_photon_rate) -> list[PhotonGMData]:
         sim_copy = copy.deepcopy(self.data)
         for i, community in enumerate(sim_copy):
-            community.gm_photon.photon_weights = community.gm_photon.photon_weights*poisson(mean_photon_rate, i+1) # i+1 because photon number starts at 1
+            community.gm_photon.photon_weights = (
+                community.gm_photon.photon_weights * poisson(mean_photon_rate, i + 1)
+            )  # i+1 because photon number starts at 1
 
         return sim_copy
-    
-    def scale_mfr_and_apply_vector_offset(self, mean_photon_rate: float, offset: np.ndarray | list[float]) -> list[PhotonGMData]:
+
+    def scale_mfr_and_apply_vector_offset(
+        self, mean_photon_rate: float, offset: np.ndarray | list[float]
+    ) -> list[PhotonGMData]:
         sim_copy = copy.deepcopy(self.data)
         for i, community in enumerate(sim_copy):
-            community.gm_photon.photon_weights = community.gm_photon.photon_weights*poisson(mean_photon_rate, i+1)
-            community.gm_photon.photon_means = community.gm_photon.photon_means - np.array(offset)
+            community.gm_photon.photon_weights = (
+                community.gm_photon.photon_weights * poisson(mean_photon_rate, i + 1)
+            )
+            community.gm_photon.photon_means = (
+                community.gm_photon.photon_means - np.array(offset)
+            )
 
         return sim_copy
 
-
-    
     def flatten_sim_at_mfr(self, mean_photon_rate: float) -> GMData:
         res = self.scale_simulation_to_match_mfr(mean_photon_rate)
 
@@ -257,13 +277,111 @@ class StaticSimulation:
             means.extend(photon_community.gm_photon.photon_means)
             covariances.extend(photon_community.gm_photon.photon_covariances)
 
-        flattened_gm_data = GMData(weights=weights, means=means, covariances=covariances, num_components=len(weights), log_likelihood=0)
+        flattened_gm_data = GMData(
+            weights=weights,
+            means=means,
+            covariances=covariances,
+            num_components=len(weights),
+            log_likelihood=0,
+        )
         return flattened_gm_data
-    
 
 
+from matplotlib.patches import Ellipse
 
 ### colors, plotting, etc
+
+
+def draw_ellipse(position, covariance, ax=None, single_ellipse=False, **kwargs):
+    """Draw an ellipse with a given position and covariance"""
+    try:
+        ax = ax or plt.gca()
+    except ValueError:
+        print(
+            "ax is not a valid matplotlib axis object. It might be an array of axese (not supported)"
+        )
+
+    # Convert covariance to principal axes
+    if covariance.shape == (2, 2):
+        U, s, Vt = np.linalg.svd(covariance)
+        angle = np.degrees(np.arctan2(U[1, 0], U[0, 0]))
+        width, height = 2 * np.sqrt(s)
+    else:
+        angle = 0
+        width, height = 2 * np.sqrt(covariance)
+
+    # Draw the Ellipse
+    if single_ellipse:
+        nsig = 3
+        ax.add_patch(
+            Ellipse(
+                position, nsig * width, nsig * height, angle=angle, fill=False, **kwargs
+            )
+        )
+    else:
+        for nsig in np.linspace(0, 4, 8):
+            ax.add_patch(
+                Ellipse(
+                    position,
+                    nsig * width,
+                    nsig * height,
+                    angle=angle,
+                    fill=False,
+                    **kwargs
+                )
+            )
+
+
+def plot_gmm(
+    ax,
+    g: GMData | GMDataPhotonCommunity,
+    label=True,
+    data_alpha=0.2,
+    single_ellipse=False,
+    weights_as_alpha=False,
+    alpha_scaler: float = 5,
+    **ellipse_kwargs
+):
+    """for plotting a all ellipses in a GMdata structure. single_ellipse controlls if one ellipse or more is plotted for each gaussian"""
+    # w_factor = 0.2 / g.weights.max()
+
+    if isinstance(g, GMData):
+        for pos, covar, w in zip(g.means, g.covariances, g.weights):
+            if weights_as_alpha:
+                draw_ellipse(
+                    pos,
+                    covar,
+                    ax=ax,
+                    single_ellipse=single_ellipse,
+                    alpha=min(1, w*alpha_scaler),
+                    **ellipse_kwargs
+                )
+            else:
+                draw_ellipse(
+                    pos, covar, ax=ax, single_ellipse=single_ellipse, **ellipse_kwargs
+                )
+    elif isinstance(g, GMDataPhotonCommunity) or isinstance(
+        g, load_schema.GMDataPhotonCommunity
+    ):
+        for pos, covar, w in zip(
+            g.photon_means, g.photon_covariances, g.photon_weights
+        ):
+            if weights_as_alpha:
+                draw_ellipse(
+                    pos,
+                    covar,
+                    ax=ax,
+                    single_ellipse=single_ellipse,
+                    alpha=min(1, w*alpha_scaler),
+                    **ellipse_kwargs
+                )
+            else:
+                draw_ellipse(
+                    pos, covar, ax=ax, single_ellipse=single_ellipse, **ellipse_kwargs
+                )
+    else:
+        print(type(g))
+        raise TypeError("g must be of type GMData or GMDataPhotonCommunity")
 
 
 def darken_and_saturate(hex_color, darken_factor=0.7, saturation_factor=1.3):
@@ -286,6 +404,7 @@ def darken_and_saturate(hex_color, darken_factor=0.7, saturation_factor=1.3):
     hex_color = "#{:02x}{:02x}{:02x}".format(*rgb_color)
 
     return hex_color
+
 
 def lighten_and_desaturate(hex_color, lighten_factor=1.3, desaturation_factor=0.7):
     # Convert hex to RGB

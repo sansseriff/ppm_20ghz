@@ -1,7 +1,7 @@
 from pydantic import BaseModel, validator
 import numpy as np
 from enum import Enum
-from dataclasses import dataclass, fields, field, _MISSING_TYPE 
+from dataclasses import dataclass, fields, field, _MISSING_TYPE
 
 
 class Result(Enum):
@@ -18,6 +18,7 @@ class PhotonNumberMeasurement(BaseModel):
     correction: int
     measured: int | None = None
 
+
 class Event(BaseModel):
     result: Result
     measured: int = -1
@@ -31,49 +32,50 @@ class Event(BaseModel):
     pnr_2nd_best: PhotonNumberMeasurement | None = None
 
 
-
 class GMData(BaseModel):
     """stores data for gaussian mixture that models detector response for a given mean photon rate.
     Contains gaussians that model multiple photon number groupings
     """
+
     num_components: int
     log_likelihood: float
     covariances: list
     means: list
     weights: list
 
-    @validator('covariances', 'means', 'weights')
+    @validator("covariances", "means", "weights")
     def to_numpy_array(cls, v):
         if isinstance(v, list):
             return np.array(v)
         return v
-    
+
     class Config:
         arbitrary_types_allowed = True
 
 
 class GMDataPhotonCommunity(BaseModel):
-    """stores data for gaussian mixture that models ONE PNR grouping
-    """
+    """stores data for gaussian mixture that models ONE PNR grouping"""
+
     photon_num_components: int
     photon_covariances: list
     photon_means: list
     photon_weights: list
 
-    @validator('photon_covariances', 'photon_means', 'photon_weights')
+    @validator("photon_covariances", "photon_means", "photon_weights")
     def to_numpy_array(cls, v):
         if isinstance(v, list):
             return np.array(v)
         return v
-    
+
     class Config:
         arbitrary_types_allowed = True
+
 
 class GMTotalData(BaseModel):
     gm_list: list[GMData]
     counts: list
 
-    @validator('counts')
+    @validator("counts")
     def to_numpy_array(cls, v):
         if isinstance(v, list):
             return np.array(v)
@@ -88,7 +90,14 @@ class CorrectionData(BaseModel):
     uncorrected_hist1: list
     uncorrected_hist2: list
 
-    @validator('corrected_hist1', 'corrected_hist2', 'corrected_bins', 'uncorrected_bins', 'uncorrected_hist1', 'uncorrected_hist2')
+    @validator(
+        "corrected_hist1",
+        "corrected_hist2",
+        "corrected_bins",
+        "uncorrected_bins",
+        "uncorrected_hist1",
+        "uncorrected_hist2",
+    )
     def to_numpy_array(cls, v):
         if isinstance(v, list):
             return np.array(v)
@@ -96,6 +105,7 @@ class CorrectionData(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
+
 
 class PNRHistCorrectionData(BaseModel):
     counts: list
@@ -104,7 +114,7 @@ class PNRHistCorrectionData(BaseModel):
     bins: list
     slices: list
 
-    @validator('counts', 'corr1', 'corr2', 'bins', 'slices')
+    @validator("counts", "corr1", "corr2", "bins", "slices")
     def to_numpy_array(cls, v):
         if isinstance(v, list):
             return np.array(v)
@@ -112,6 +122,7 @@ class PNRHistCorrectionData(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
+
 
 class Decode(BaseModel):
     results: list[list[Event]]

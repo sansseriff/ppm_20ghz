@@ -231,7 +231,7 @@ def caller(decode: Decode):
 def pnr_caller(data: tuple[Decode, list[PhotonGMData], float | None]):
     decode: Decode = data[0]
     sim_data: list[PhotonGMData] = data[1]
-    offset_param = data[2]
+    offset_param = data[2] if len(data) > 2 else None
 
     print("this is offset param: ", offset_param)
 
